@@ -20,7 +20,7 @@ CSV and easier to work with than raw MODAQ output.
 
 ## Quick Start
 
-Quick install from GitHub:
+### Quick install from GitHub:
 
 ```bash
 pip install git+https://github.nrel.gov/Water-Power/modaq_toolkit.git
@@ -136,29 +136,24 @@ Note: MODAQ data always includes a `time` column which should be used for sortin
 
 ## Installation
 
-### Prerequisites
-
-#### Python Requirements
-
-- Python 3.10 or higher is required
-- We recommend using Anaconda or Miniconda for environment management
-
-#### Installing Python/Anaconda
+### 1. Prerequisites: Install Python/Anaconda
 
 **For NREL Enterprise Users:**
 
 1. Open "Portal Manager" on your NREL workstation
+
+![Portal Manager MacOS](./docs/portal_manager.png)
+
 2. Browse to the Anaconda package
 3. Click "Install" to get the full Anaconda distribution with Python
-   [A screenshot demonstrating these steps is available in the repository's documentation]
 
 **For Non-NREL Users:**
-Download and install either:
 
-- [Anaconda](https://www.anaconda.com/download) (full distribution with many pre-installed packages)
-- [Miniconda](https://docs.conda.io/en/latest/miniconda.html) (minimal distribution, recommended for most users)
+- Download either:
+  - [Anaconda](https://www.anaconda.com/download) (full distribution with many pre-installed packages)
+  - [Miniconda](https://docs.conda.io/en/latest/miniconda.html) (minimal distribution, recommended for most users)
 
-Create and activate a new environment:
+Then create and activate a new environment:
 
 ```bash
 # Create new environment with Python 3.10
@@ -171,111 +166,52 @@ conda activate modaq
 source activate modaq
 ```
 
-### Clone the Repository
+### 2. Easy Install (pip from GitHub)
 
-Choose one of the following methods to clone the repository:
-
-#### HTTPS (Recommended for most users)
-
-```bash
-git clone https://github.nrel.gov/Water-Power/modaq_toolkit
-```
-
-#### SSH (For contributors)
-
-First, ensure you have [configured SSH access for GitHub Enterprise](https://docs.github.com/en/enterprise-cloud@latest/authentication/connecting-to-github-with-ssh). Then:
-
-```bash
-git clone git@github.nrel.gov:Water-Power/modaq_toolkit.git
-```
-
-#### GitHub Desktop
-
-1. Open GitHub Desktop
-2. Go to File > Clone Repository
-3. Select the "GitHub Enterprise" tab
-4. Search for "modaq_toolkit"
-5. Choose your local path
-6. Click "Clone"
-
-### Navigate to Repository Directory
-
-Choose the appropriate command for your system:
-
-Windows (Command Prompt):
-
-```cmd
-cd C:\path\to\modaq_toolkit
-```
-
-Windows (PowerShell):
-
-```powershell
-Set-Location -Path C:\path\to\modaq_toolkit
-```
-
-Unix-like systems (Linux, macOS):
-
-```bash
-cd /path/to/modaq_toolkit
-```
-
-### Install the Package
-
-#### Option 1: Install from local directory
-
-Once in the correct directory, install the package:
-
-```bash
-pip install -e .
-```
-
-#### Option 2: Install directly from GitHub
-
-Install the latest version from the main branch:
+For most users who just want to use the package, this is the recommended method:
 
 ```bash
 pip install git+https://github.nrel.gov/Water-Power/modaq_toolkit.git
 ```
 
-Or install a specific branch, tag, or commit:
+### 3. Complete Install (Clone & Development Setup)
 
-```bash
-# Install from a branch
-pip install git+https://github.nrel.gov/Water-Power/modaq_toolkit.git@branch-name
+For developers or those who need to modify the code:
 
-# Install from a tag
-pip install git+https://github.nrel.gov/Water-Power/modaq_toolkit.git@v1.0.0
+1. Clone the repository:
 
-# Install from a specific commit
-pip install git+https://github.nrel.gov/Water-Power/modaq_toolkit.git@commit-hash
-```
+   ```bash
+   # HTTPS (Recommended for most users)
+   git clone https://github.nrel.gov/Water-Power/modaq_toolkit
 
-For SSH users:
+   # SSH (For contributors)
+   git clone git@github.nrel.gov:Water-Power/modaq_toolkit.git
+   ```
 
-```bash
-pip install git+ssh://git@github.nrel.gov/Water-Power/modaq_toolkit.git
-```
+2. Navigate to repository:
 
-> **Note:** The `-e` flag performs an "editable" install, which means:
->
-> - The package is installed in "development mode"
-> - Changes to the source code take effect immediately without reinstalling
-> - The actual package code stays in its current location and is just referenced by Python
-> - The `.` tells pip to install the package from the current directory using the configuration in `pyproject.toml`
+   ```bash
+   cd modaq_toolkit  # Adjust path as needed
+   ```
 
-For development (includes additional dependencies for testing and development):
+3. Install in development mode:
 
-```bash
-pip install -e ".[dev]"
-```
+   ```bash
+   # Standard development install
+   pip install -e .
 
-Note: Make sure you're in the directory containing the `pyproject.toml` file before running the pip install commands.
+   # Full development install with testing tools
+   pip install -e ".[dev]"
+   ```
 
-```bash
-ruff check .
-ruff format .
-```
+Development install benefits:
+
+- Code changes take effect immediately
+- Source remains in original location
+- Enables contributing back to the project
+- Includes development tools with `[dev]` option
+
+Would you like me to adjust any particular section or add more details to any part?
 
 ## Common Issues and Solutions
 
