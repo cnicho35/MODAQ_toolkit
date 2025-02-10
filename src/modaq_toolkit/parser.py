@@ -101,6 +101,10 @@ class MCAPParser:
                         f"\nMode-based sample rate: {1/time_diffs.value_counts().index[0]:.3f} Hz"
                     )
                 else:
+                    df["time"] = pd.to_datetime(
+                        df["timestamp"], origin="unix", unit="s", utc=True
+                    )
+                    df = df.set_index("time")
                     logger.info(
                         f"No arrays found in topic {topic}, copying original data to a2"
                     )
