@@ -30,6 +30,14 @@ For detailed installation options including conda environments, specific version
 
 ### Usage
 
+#### Command Line
+
+```bash
+modaq -i /path/to/mcap/files -o /path/to/output
+```
+
+#### Python
+
 ```python
 # Convert multiple MCAP files
 from modaq_toolkit import process_mcap_files
@@ -40,12 +48,6 @@ from modaq_toolkit import MCAPParser
 parser = MCAPParser("path/to/file.mcap")
 parser.read_mcap()
 parser.create_output("output_directory")
-```
-
-Command line usage:
-
-```bash
-modaq -i /path/to/mcap/files -o /path/to/output
 ```
 
 ## Output Structure
