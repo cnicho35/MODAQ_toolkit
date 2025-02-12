@@ -26,7 +26,7 @@ def expand_array_columns_vertically(df):
         else:
             non_array_columns.append(col)
 
-    logger.info(f"Found array columns: {array_columns}")
+    logger.debug(f"Found array columns: {array_columns}")
     if not array_columns:
         return df
 
@@ -42,7 +42,7 @@ def expand_array_columns_vertically(df):
             expanded_data.append(new_row)
 
     result_df = pd.DataFrame(expanded_data)
-    logger.info(f"Expanded shape from {df.shape} to {result_df.shape}")
+    logger.debug(f"Expanded shape from {df.shape} to {result_df.shape}")
     return result_df
 
 

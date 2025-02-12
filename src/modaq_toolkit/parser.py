@@ -1,6 +1,8 @@
 import json
 import logging
-import pathlib
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 from mcap.reader import make_reader
@@ -16,171 +18,409 @@ from .message_processing import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class TopicTiming:
+    """Stores timing information for a topic."""
+
+    start_time: datetime
+    end_time: datetime
+    number_of_samples: int
+    duration: float
+    mean_rate: float
+    max_rate: float
+    min_rate: float
+    rate_std: float
+
+    def format_for_display(self) -> tuple:
+        """Returns formatted strings for display in timing summary."""
+        return (
+            self.start_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
+            self.end_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
+            self.number_of_samples,
+            self.duration,
+            self.mean_rate,
+            self.max_rate,
+            self.min_rate,
+            self.rate_std,
+        )
+
+
+@dataclass
+class TopicMetadata:
+    """Stores metadata for a topic."""
+
+    topic: str
+    source_file: str
+    n_messages: int
+    n_columns: int
+    columns: list
+    dtypes: dict
+    schema: dict
+    processing_stage: str
+    parquet_file: str
+
+
 class MCAPParser:
-    def __init__(self, mcap_path: pathlib.Path):
+    """Parses MCAP files and converts them to parquet format with metadata."""
+
+    # Class-level configuration
+    TIME_WARNING_THRESHOLD_SECONDS: float = (
+        1.0  # Threshold for timing misalignment warnings
+    )
+
+    def __init__(self, mcap_path: Path):
         self.mcap_path = mcap_path
         self.processors: dict[str, MessageProcessor] = {}
         self.schemas_by_topic: dict[str, dict] = {}
         self.dataframes: dict[str, pd.DataFrame] = {}
 
-    def read_mcap(self):
-        logger.info(f"Reading {self.mcap_path}")
+    def _process_channel(self, channel, schema, summary) -> None:
+        """Process a single channel from the MCAP file."""
+        self.schemas_by_topic[channel.topic] = parse_ros_message_definition(schema.data)
+        self.processors[channel.topic] = MessageProcessor(
+            self.schemas_by_topic[channel.topic]
+        )
+
+    def _process_message(self, channel, decoded) -> None:
+        """Process a single message from a channel."""
+        if decoded is None:
+            logger.warning(f"Could not decode message for topic {channel.topic}")
+            return
+
+        try:
+            self.processors[channel.topic].process_message(decoded)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to process message for topic {channel.topic}: {e}"
+            )
+
+    def read_mcap(self) -> None:
+        """Read and process the MCAP file."""
+        logger.info(f"Processing MCAP file: {self.mcap_path}")
+
         with open(self.mcap_path, "rb") as f:
             reader = make_reader(f, decoder_factories=[DecoderFactory()])
             summary = reader.get_summary()
+
             if summary is None:
                 raise ValueError("Could not read summary from MCAP file")
 
+            # Process channels
+            topic_names = [channel.topic for channel in summary.channels.values()]
+            logger.info(f"Found {len(topic_names)} topics: {', '.join(topic_names)}")
+
             for channel in summary.channels.values():
                 schema = summary.schemas[channel.schema_id]
-                self.schemas_by_topic[channel.topic] = parse_ros_message_definition(
-                    schema.data
-                )
-                self.processors[channel.topic] = MessageProcessor(
-                    self.schemas_by_topic[channel.topic]
-                )
+                self._process_channel(channel, schema, summary)
 
+            # Process messages
             for schema, channel, message, decoded in reader.iter_decoded_messages():
-                if decoded is None:
-                    logger.warning(
-                        f"Could not decode message for topic {channel.topic}"
-                    )
-                    continue
+                self._process_message(channel, decoded)
 
-                try:
-                    self.processors[channel.topic].process_message(decoded)
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Failed to process message for topic {channel.topic}: {e}"
-                    )
-
+            # Create dataframes
             for topic, processor in self.processors.items():
                 self.dataframes[topic] = processor.get_dataframe()
-                logger.info(
+                logger.debug(
                     f"Topic {topic} DataFrame shape: {self.dataframes[topic].shape}"
                 )
 
-    def create_output(self, output_dir: pathlib.Path, stage: str = "a1_one_to_one"):
-        """Create partitioned parquet files and metadata JSON for each topic"""
+    def _process_dataframe_for_stage2(
+        self, df: pd.DataFrame
+    ) -> tuple[pd.DataFrame, float]:
+        """Process a dataframe for stage 2, returning the processed df and sample rate."""
+        object_columns = [col for col in df.columns if is_array_column(df[col])]
+
+        if object_columns:
+            logger.debug("Found arrays, expanding for a2 processing")
+            df = expand_array_columns_vertically(df)
+            df["time"] = pd.to_datetime(
+                df["system_time"], origin="unix", unit="ns", utc=True
+            )
+            df = df.set_index("time")
+            df = df.drop(["sec", "nanosec", "frame_id", "timestamp"], axis="columns")
+
+            time_diffs = df.index.to_series().diff().dt.total_seconds()
+            return df, 1 / time_diffs.mean()
+        else:
+            df["time"] = pd.to_datetime(
+                df["timestamp"], origin="unix", unit="s", utc=True
+            )
+            df = df.set_index("time")
+            return df, None
+
+    def _get_topic_timing(self, df: pd.DataFrame) -> TopicTiming:
+        """Calculate timing information for a topic including sample rate statistics."""
+        time_diffs = df.index.to_series().diff().dt.total_seconds()
+        rates = 1 / time_diffs.dropna()  # Convert to Hz and remove NaN from first diff
+
+        return TopicTiming(
+            start_time=df.index.min(),
+            end_time=df.index.max(),
+            number_of_samples=len(df),
+            duration=(df.index.max() - df.index.min()).total_seconds(),
+            mean_rate=rates.mean(),
+            max_rate=rates.max(),
+            min_rate=rates.min(),
+            rate_std=rates.std(),
+        )
+
+    def _check_timing_misalignments(self, time_tracker: dict[str, TopicTiming]) -> None:
+        """Check for timing misalignments between topics."""
+        if len(time_tracker) <= 1:
+            return
+
+        # Filter out zero-duration topics for timing calculations
+        non_zero_topics = {
+            topic: stats for topic, stats in time_tracker.items() if stats.duration > 0
+        }
+
+        excluded_topics = set(time_tracker.keys()) - set(non_zero_topics.keys())
+        if excluded_topics:
+            logger.info(
+                f"Excluding zero-duration topics from timing alignment check: {', '.join(excluded_topics)}"
+            )
+
+        # Find earliest and latest start/end times and their corresponding topics
+        start_times = {
+            topic: stats.start_time for topic, stats in non_zero_topics.items()
+        }
+        end_times = {topic: stats.end_time for topic, stats in non_zero_topics.items()}
+
+        earliest_start = min(start_times.values())
+        latest_start = max(start_times.values())
+        earliest_end = min(end_times.values())
+        latest_end = max(end_times.values())
+
+        earliest_start_topics = [
+            topic for topic, time in start_times.items() if time == earliest_start
+        ]
+        latest_start_topics = [
+            topic for topic, time in start_times.items() if time == latest_start
+        ]
+        earliest_end_topics = [
+            topic for topic, time in end_times.items() if time == earliest_end
+        ]
+        latest_end_topics = [
+            topic for topic, time in end_times.items() if time == latest_end
+        ]
+
+        max_start_diff = latest_start - earliest_start
+        max_end_diff = latest_end - earliest_end
+
+        if max_start_diff.total_seconds() > self.TIME_WARNING_THRESHOLD_SECONDS:
+            logger.warning(
+                f"Start time misalignment detected!\n"
+                f"  Expected maximum difference: {self.TIME_WARNING_THRESHOLD_SECONDS:.3f} seconds\n"
+                f"  Actual difference: {max_start_diff.total_seconds():.3f} seconds\n"
+                f"  Earliest starting topics: {', '.join(earliest_start_topics)} at {earliest_start}\n"
+                f"  Latest starting topics: {', '.join(latest_start_topics)} at {latest_start}"
+            )
+
+        if max_end_diff.total_seconds() > self.TIME_WARNING_THRESHOLD_SECONDS:
+            logger.warning(
+                f"End time misalignment detected!\n"
+                f"  Expected maximum difference: {self.TIME_WARNING_THRESHOLD_SECONDS:.3f} seconds\n"
+                f"  Actual difference: {max_end_diff.total_seconds():.3f} seconds\n"
+                f"  Earliest ending topics: {', '.join(earliest_end_topics)} at {earliest_end}\n"
+                f"  Latest ending topics: {', '.join(latest_end_topics)} at {latest_end}"
+            )
+
+    def create_output(self, output_dir: Path, stage: str = "a1_one_to_one") -> None:
+        """Create partitioned parquet files and metadata JSON for each topic."""
         stage_dir = output_dir / stage
         metadata_dir = output_dir / "metadata"
         stage_dir.mkdir(parents=True, exist_ok=True)
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
+        logger.info(f"Running stage: {stage}")
         summary_metadata = {}
+        time_tracker: dict[str, TopicTiming] = {}
+
+        non_empty_topics = [
+            topic for topic, df in self.dataframes.items() if not df.empty
+        ]
+        logger.info(f"Processing {len(non_empty_topics)} non-empty topics")
 
         for topic, df in self.dataframes.items():
-            safe_topic = topic.replace("/", "_").lstrip("_")
-
             if df.empty:
+                logger.debug(f"Skipping empty topic: {topic}")
                 continue
 
+            safe_topic = topic.replace("/", "_").lstrip("_")
             topic_dir = stage_dir / f"channel={safe_topic}"
             topic_dir.mkdir(exist_ok=True)
 
             if stage == "a2_real_data":
-                object_columns = [col for col in df.columns if is_array_column(df[col])]
+                df, sample_rate = self._process_dataframe_for_stage2(df)
+                if sample_rate:
+                    logger.debug(f"Sample rate for {topic}: {sample_rate:.3f} Hz")
+                time_tracker[safe_topic] = self._get_topic_timing(df)
 
-                if object_columns:
-                    logger.info(
-                        f"Found arrays in topic {topic}, expanding for a2 processing"
-                    )
-                    df = expand_array_columns_vertically(df)
-                    df["time"] = pd.to_datetime(
-                        df["system_time"], origin="unix", unit="ns", utc=True
-                    )
-                    df = df.set_index("time")
-                    df = df.drop(
-                        ["sec", "nanosec", "frame_id", "timestamp"], axis="columns"
-                    )
-
-                    time_diffs = df.index.to_series().diff().dt.total_seconds()
-                    median_interval = time_diffs.mean()
-                    print(f"Sample rate: {1/median_interval:.3f} Hz")
-                    print(
-                        f"\nMode-based sample rate: {1/time_diffs.value_counts().index[0]:.3f} Hz"
-                    )
-                else:
-                    df["time"] = pd.to_datetime(
-                        df["timestamp"], origin="unix", unit="s", utc=True
-                    )
-                    df = df.set_index("time")
-                    logger.info(
-                        f"No arrays found in topic {topic}, copying original data to a2"
-                    )
-
+            # Save parquet file
             base_filename = f"{self.mcap_path.stem}.{safe_topic}"
             parquet_filename = f"{base_filename}.parquet"
             output_path = topic_dir / parquet_filename
             df.to_parquet(output_path)
-            logger.info(f"Saved {output_path}")
+            logger.debug(f"Saved {output_path}")
 
             if stage == "a1_one_to_one":
-                topic_metadata = {
-                    "topic": topic,
-                    "source_file": str(self.mcap_path),
-                    "n_messages": len(df),
-                    "n_columns": len(df.columns),
-                    "columns": df.columns.tolist(),
-                    "dtypes": {col: str(df[col].dtype) for col in df.columns},
-                    "schema": self.schemas_by_topic[topic],
-                    "processing_stage": stage,
-                    "parquet_file": str(output_path.relative_to(stage_dir)),
-                }
-
-                safe_topic_metadata_name = (
-                    f"{self.mcap_path.stem}.{safe_topic}.metadata.json"
+                self._save_topic_metadata(
+                    topic, df, output_path, stage_dir, metadata_dir, summary_metadata
                 )
-                topic_metadata_path = metadata_dir / safe_topic_metadata_name
-                with open(topic_metadata_path, "w") as f:
-                    json.dump(topic_metadata, f, indent=2)
-                logger.info(f"Saved metadata to {topic_metadata_path}")
 
-                summary_metadata[topic] = topic_metadata
+        logger.info(f"Data saved to: {stage_dir}")
+
+        if stage == "a2_real_data" and time_tracker:
+            self._display_timing_summary(time_tracker)
+            self._check_timing_misalignments(time_tracker)
 
         if stage == "a1_one_to_one":
-            summary = {
-                "source_file": str(self.mcap_path),
-                "n_topics": len(self.dataframes),
-                "n_topics_with_data": sum(
-                    1 for df in self.dataframes.values() if not df.empty
-                ),
-                "creation_time": pd.Timestamp.now().isoformat(),
-                "processing_stage": stage,
-                "topics": summary_metadata,
-            }
+            self._save_summary_metadata(summary_metadata, metadata_dir)
 
-            summary_path = metadata_dir / f"{self.mcap_path.stem}.summary.json"
-            with open(summary_path, "w") as f:
-                json.dump(summary, f, indent=2)
-            logger.info(f"Saved summary metadata to {summary_path}")
+    def _save_topic_metadata(
+        self,
+        topic: str,
+        df: pd.DataFrame,
+        output_path: Path,
+        stage_dir: Path,
+        metadata_dir: Path,
+        summary_metadata: dict,
+    ) -> None:
+        """Save metadata for a single topic."""
+        topic_metadata = TopicMetadata(
+            topic=topic,
+            source_file=str(self.mcap_path),
+            n_messages=len(df),
+            n_columns=len(df.columns),
+            columns=df.columns.tolist(),
+            dtypes={col: str(df[col].dtype) for col in df.columns},
+            schema=self.schemas_by_topic[topic],
+            processing_stage="a1_one_to_one",
+            parquet_file=str(output_path.relative_to(stage_dir)),
+        )
+
+        safe_topic = topic.replace("/", "_").lstrip("_")
+        safe_topic_metadata_name = f"{self.mcap_path.stem}.{safe_topic}.metadata.json"
+        topic_metadata_path = metadata_dir / safe_topic_metadata_name
+
+        with open(topic_metadata_path, "w") as f:
+            json.dump(vars(topic_metadata), f, indent=2)
+
+        logger.debug(f"Saved metadata to {topic_metadata_path}")
+        summary_metadata[topic] = vars(topic_metadata)
+
+    def _save_summary_metadata(
+        self, summary_metadata: dict, metadata_dir: Path
+    ) -> None:
+        """Save summary metadata for all topics."""
+        summary = {
+            "source_file": str(self.mcap_path),
+            "n_topics": len(self.dataframes),
+            "n_topics_with_data": sum(
+                1 for df in self.dataframes.values() if not df.empty
+            ),
+            "creation_time": pd.Timestamp.now().isoformat(),
+            "processing_stage": "a1_one_to_one",
+            "topics": summary_metadata,
+        }
+
+        summary_path = metadata_dir / f"{self.mcap_path.stem}.summary.json"
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        logger.debug(f"Saved summary metadata to {summary_path}")
+
+    def _display_timing_summary(self, time_tracker: dict[str, TopicTiming]) -> None:
+        """Display timing summary table using tabulate for better formatting."""
+        from tabulate import tabulate
+
+        # Create DataFrame from timing data
+        summary_data = []
+        for topic, stats in time_tracker.items():
+            formatted_stats = stats.format_for_display()
+            summary_data.append(
+                {
+                    "Topic": topic,
+                    "Start Time [UTC]": formatted_stats[0],
+                    "End Time [UTC]": formatted_stats[1],
+                    "Samples": formatted_stats[2],
+                    "Duration (s)": formatted_stats[3],
+                    "Mean Sample Rate [Hz]": formatted_stats[4],
+                    "Max Sample Rate [Hz]": formatted_stats[5],
+                    "Min Sample Rate [Hz]": formatted_stats[6],
+                    "Sample Rate Std Dev [Hz]": formatted_stats[7],
+                }
+            )
+
+        df_summary = pd.DataFrame(summary_data)
+
+        # Format numeric columns
+        df_summary["Duration (s)"] = df_summary["Duration (s)"].map("{:.2f}".format)
+        df_summary["Mean Sample Rate [Hz]"] = df_summary["Mean Sample Rate [Hz]"].map(
+            "{:.2f}".format
+        )
+        df_summary["Max Sample Rate [Hz]"] = df_summary["Max Sample Rate [Hz]"].map(
+            "{:.2f}".format
+        )
+        df_summary["Min Sample Rate [Hz]"] = df_summary["Min Sample Rate [Hz]"].map(
+            "{:.2f}".format
+        )
+        df_summary["Sample Rate Std Dev [Hz]"] = df_summary[
+            "Sample Rate Std Dev [Hz]"
+        ].map("{:.3f}".format)
+
+        # Configure column alignments
+        alignments = {
+            "Topic": "left",
+            "Start Time [UTC]": "left",
+            "End Time [UTC]": "left",
+            "Samples": "right",
+            "Duration (s)": "right",
+            "Mean Sample Rate [Hz]": "right",
+            "Max Sample Rate [Hz]": "right",
+            "Min Sample Rate [Hz]": "right",
+            "Sample Rate Std Dev [Hz]": "right",
+        }
+
+        # Display the summary using tabulate
+        print(f"\n\nTiming Summary for {self.mcap_path}:")
+        print(
+            tabulate(
+                df_summary,
+                headers="keys",
+                tablefmt="pretty",
+                showindex=False,
+                colalign=[alignments[col] for col in df_summary.columns],
+            )
+        )
+        print()
 
 
-def process_mcap_files(input_dir: str, output_dir: str):
-    """Process all MCAP files in a directory with single read and dual output"""
-    input_path = pathlib.Path(input_dir)
-    output_path = pathlib.Path(output_dir)
+def process_mcap_files(input_dir: str, output_dir: str) -> None:
+    """Process all MCAP files in a directory with single read and dual output."""
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
 
+    # Create output directories
     metadata_dir = output_path / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)
     (output_path / "a1_one_to_one").mkdir(parents=True, exist_ok=True)
     (output_path / "a2_real_data").mkdir(parents=True, exist_ok=True)
 
-    for mcap_file in sorted(input_path.glob("*.mcap")):
-        logger.info(f"Processing {mcap_file}")
+    mcap_files = sorted(input_path.glob("*.mcap"))
+    logger.info(f"Found {len(mcap_files)} MCAP files in {input_path}")
+
+    # Process each MCAP file
+    for mcap_file in mcap_files:
+        logger.info(f"\nProcessing file {mcap_file.name}")
 
         parser = MCAPParser(mcap_file)
         parser.read_mcap()
         original_dataframes = parser.dataframes.copy()
 
-        logger.info("Running stage 1: Original data")
         parser.create_output(output_path, stage="a1_one_to_one")
 
-        logger.info("Running stage 2: Expanded arrays")
-        for topic, df in original_dataframes.items():
-            if not df.empty:
-                parser.dataframes[topic] = df
+        logger.debug("Processing expanded arrays")
+        parser.dataframes = original_dataframes
         parser.create_output(output_path, stage="a2_real_data")
 
-        parser.dataframes = original_dataframes
-        logger.info(f"Completed processing {mcap_file}")
+        logger.info(f"Completed processing {mcap_file.name}\n")
