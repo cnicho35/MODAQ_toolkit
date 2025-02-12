@@ -1,5 +1,9 @@
+import asyncio
+import itertools
 import json
 import logging
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -382,7 +386,7 @@ class MCAPParser:
         }
 
         # Display the summary using tabulate
-        print(f"\n\nTiming Summary for {self.mcap_path}:")
+        print("\nTiming Summary:")
         print(
             tabulate(
                 df_summary,
@@ -392,35 +396,129 @@ class MCAPParser:
                 colalign=[alignments[col] for col in df_summary.columns],
             )
         )
-        print()
 
 
-def process_mcap_files(input_dir: str, output_dir: str) -> None:
-    """Process all MCAP files in a directory with single read and dual output."""
-    input_path = Path(input_dir)
-    output_path = Path(output_dir)
+def get_mcap_files(input_path: Path) -> list[tuple[Path, str]]:
+    """
+    Recursively find all MCAP files in the input directory and its subdirectories.
+    Returns a list of tuples containing (file_path, group_name).
+    Group name is the parent folder name for nested files.
+    """
+    mcap_files = []
 
-    # Create output directories
-    metadata_dir = output_path / "metadata"
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    (output_path / "a1_one_to_one").mkdir(parents=True, exist_ok=True)
-    (output_path / "a2_real_data").mkdir(parents=True, exist_ok=True)
+    for mcap_path in input_path.rglob("*.mcap"):
+        # Get the relative path from input directory to the file
+        rel_path = mcap_path.relative_to(input_path)
 
-    mcap_files = sorted(input_path.glob("*.mcap"))
-    logger.info(f"Found {len(mcap_files)} MCAP files in {input_path}")
+        # If file is in a subdirectory, use parent folder name as group
+        if len(rel_path.parts) > 1:
+            group_name = rel_path.parts[0]
+        else:
+            group_name = "default"
 
-    # Process each MCAP file
-    for mcap_file in mcap_files:
-        logger.info(f"\nProcessing file {mcap_file.name}")
+        mcap_files.append((mcap_path, group_name))
+
+    return sorted(mcap_files)
+
+
+def process_single_file(mcap_file: Path, group: str, output_path: Path) -> None:
+    """Process a single MCAP file - this function runs in its own process."""
+    try:
+        logger.info(f"\nProcessing file {mcap_file.name} from group '{group}'")
+
+        # Create group-specific output directories
+        group_output = output_path / group
+        group_metadata = group_output / "metadata"
+        (group_output / "a1_one_to_one").mkdir(parents=True, exist_ok=True)
+        (group_output / "a2_real_data").mkdir(parents=True, exist_ok=True)
+        group_metadata.mkdir(parents=True, exist_ok=True)
 
         parser = MCAPParser(mcap_file)
         parser.read_mcap()
         original_dataframes = parser.dataframes.copy()
 
-        parser.create_output(output_path, stage="a1_one_to_one")
-
-        logger.debug("Processing expanded arrays")
+        parser.create_output(group_output, stage="a1_one_to_one")
+        logger.info("Processing expanded arrays")
         parser.dataframes = original_dataframes
-        parser.create_output(output_path, stage="a2_real_data")
+        parser.create_output(group_output, stage="a2_real_data")
 
         logger.info(f"Completed processing {mcap_file.name}\n")
+        return mcap_file.name
+    except Exception as e:
+        logger.error(f"Error processing {mcap_file.name}: {e!s}")
+        return None
+
+
+async def process_mcap_files_parallel(
+    mcap_files: list[tuple[Path, str]],
+    output_path: Path,
+    max_workers: int | None = None,
+) -> None:
+    """Process MCAP files in parallel using ProcessPoolExecutor."""
+    if max_workers is None:
+        # Use CPU count - 1 to leave one core free for system tasks
+        max_workers = max(1, multiprocessing.cpu_count() - 1)
+
+    logger.info(f"Processing files using {max_workers} worker processes")
+
+    loop = asyncio.get_event_loop()
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        # Create tasks for all files
+        futures = [
+            loop.run_in_executor(
+                pool, process_single_file, mcap_file, group, output_path
+            )
+            for mcap_file, group in mcap_files
+        ]
+
+        # Process files and handle results as they complete
+        for completed in asyncio.as_completed(futures):
+            try:
+                result = await completed
+                if result:
+                    logger.debug(f"Successfully processed: {result}")
+            except Exception as e:
+                logger.error(f"Process failed with error: {e!s}")
+
+
+def process_mcap_files(
+    input_dir: str, output_dir: str, async_processing: bool = False
+) -> None:
+    """
+    Process all MCAP files in a directory and its subdirectories with single read and dual output.
+
+    Args:
+        input_dir: Input directory containing MCAP files
+        output_dir: Output directory for processed files
+        async_processing: If True, process files in parallel using multiple CPU cores
+    """
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
+
+    # Find all MCAP files in input directory and subdirectories
+    mcap_files = get_mcap_files(input_path)
+    logger.info(f"Found {len(mcap_files)} MCAP files in {input_path}")
+
+    # Group files by their parent directory
+    groups = {
+        group: len(list(files))
+        for group, files in itertools.groupby(mcap_files, key=lambda x: x[1])
+    }
+
+    for group, count in groups.items():
+        logger.info(f"Group '{group}': {count} files")
+
+    if async_processing:
+        try:
+            asyncio.run(process_mcap_files_parallel(mcap_files, output_path))
+        except KeyboardInterrupt:
+            logger.warning("\nProcessing interrupted by user")
+            return
+    else:
+        # Sequential processing
+        for mcap_file, group in mcap_files:
+            try:
+                process_single_file(mcap_file, group, output_path)
+            except KeyboardInterrupt:
+                logger.warning("\nProcessing interrupted by user")
+                return

@@ -29,9 +29,20 @@ def main(args: list[str] | None = None) -> int:
         default=Path("./data/"),
         help="Directory for output (default: ./data)",
     )
+    parser.add_argument(
+        "--async",
+        dest="async_processing",
+        action="store_true",
+        default=False,
+        help="Enable asynchronous processing of MCAP files (default: False)",
+    )
 
     parsed_args = parser.parse_args(args)
-    process_mcap_files(parsed_args.input_dir, parsed_args.output_dir)
+    process_mcap_files(
+        parsed_args.input_dir,
+        parsed_args.output_dir,
+        async_processing=parsed_args.async_processing,
+    )
     return 0
 
 
