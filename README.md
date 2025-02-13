@@ -32,8 +32,24 @@ For detailed installation options including conda environments, specific version
 
 #### Command Line
 
+Basic usage:
+
 ```bash
 modaq -i /path/to/mcap/files -o /path/to/output
+```
+
+Available arguments:
+
+| Argument             | Description                                                                     | Required | Default   |
+| -------------------- | ------------------------------------------------------------------------------- | -------- | --------- |
+| `-i`, `--input-dir`  | Directory containing MCAP files                                                 | Yes      | -         |
+| `-o`, `--output-dir` | Directory for output                                                            | No       | `./data/` |
+| `--async`            | Enable asynchronous processing of MCAP files (Much faster, but uses more cores) | No       | `False`   |
+
+Example with all options:
+
+```bash
+modaq -i /path/to/mcap/files -o /path/to/output --async
 ```
 
 #### Python
