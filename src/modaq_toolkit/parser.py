@@ -423,30 +423,26 @@ def get_mcap_files(input_path: Path) -> list[tuple[Path, str]]:
 
 def process_single_file(mcap_file: Path, group: str, output_path: Path) -> None:
     """Process a single MCAP file - this function runs in its own process."""
-    try:
-        logger.info(f"\nProcessing file {mcap_file.name} from group '{group}'")
+    logger.info(f"\nProcessing file {mcap_file.name} from group '{group}'")
 
-        # Create group-specific output directories
-        group_output = output_path / group
-        group_metadata = group_output / "metadata"
-        (group_output / "a1_one_to_one").mkdir(parents=True, exist_ok=True)
-        (group_output / "a2_real_data").mkdir(parents=True, exist_ok=True)
-        group_metadata.mkdir(parents=True, exist_ok=True)
+    # Create group-specific output directories
+    group_output = output_path / group
+    group_metadata = group_output / "metadata"
+    (group_output / "a1_one_to_one").mkdir(parents=True, exist_ok=True)
+    (group_output / "a2_real_data").mkdir(parents=True, exist_ok=True)
+    group_metadata.mkdir(parents=True, exist_ok=True)
 
-        parser = MCAPParser(mcap_file)
-        parser.read_mcap()
-        original_dataframes = parser.dataframes.copy()
+    parser = MCAPParser(mcap_file)
+    parser.read_mcap()
+    original_dataframes = parser.dataframes.copy()
 
-        parser.create_output(group_output, stage="a1_one_to_one")
-        logger.info("Processing expanded arrays")
-        parser.dataframes = original_dataframes
-        parser.create_output(group_output, stage="a2_real_data")
+    parser.create_output(group_output, stage="a1_one_to_one")
+    logger.info("Processing expanded arrays")
+    parser.dataframes = original_dataframes
+    parser.create_output(group_output, stage="a2_real_data")
 
-        logger.info(f"Completed processing {mcap_file.name}\n")
-        return mcap_file.name
-    except Exception as e:
-        logger.error(f"Error processing {mcap_file.name}: {e!s}")
-        return None
+    logger.info(f"Completed processing {mcap_file.name}\n")
+    return mcap_file.name
 
 
 async def process_mcap_files_parallel(
