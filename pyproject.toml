@@ -15,6 +15,7 @@ authors = [
     { name = "Casey Nichols", email = "casey.nichols@nrel.gov" },
     { name = "Rebecca Fao", email = "rebecca.fao@nrel.gov" },
 ]
+
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
@@ -25,26 +26,43 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Topic :: Scientific/Engineering",
 ]
-dependencies = [
-    "mcap>=1.0.0",
-    "pandas>=2.0.0",
-    "pyarrow>=14.0.0",
-    "xarray>=2024.1.0",
-]
+
+# No core dependencies to ensure exclusive installation options
+dependencies = []
 dynamic = ["version"]
 
+# Optional dependencies
 [project.optional-dependencies]
+
+# MCAP dependencies only
+mcap = [
+    "pandas>=2.0.0",
+    "pyarrow>=19",
+    "mcap>=1.0.0",
+]
+
+# TDMS dependencies only
+tdms = [
+    "pandas>=2.0.0",
+    "pyarrow>=19.0.0",
+    "npTDMS>=1.10.0",
+]
+
+# Default installation with both MCAP and TDMS support
+all = [
+    "pandas>=2.0.0",
+    "pyarrow>=19.0.0",
+    "mcap>=1.0.0",
+    "npTDMS==1.10.0",
+]
+
+# Development dependencies (add to any installation option)
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
     "ruff>=0.2.0",
     "mypy>=1.8.0",
-]
-docs = [
-    "sphinx>=7.0",
-    "furo>=2024.1.29",
-    "sphinx-autodoc-typehints>=1.25.2",
 ]
 
 [tool.hatch.version]
