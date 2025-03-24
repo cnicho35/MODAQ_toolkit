@@ -11,8 +11,9 @@ license = "MIT"
 keywords = ["NREL", "MODAQ", "ROS", "MCAP", "Data Analysis"]
 authors = [
     { name = "Andrew Simms", email = "andrew.simms@nrel.gov" },
-    { name = "Casey Nichols", email = "casey.nichols@nrel.gov" },
     { name = "Rob Raye", email = "robert.raye@nrel.gov" },
+    { name = "Casey Nichols", email = "casey.nichols@nrel.gov" },
+    { name = "Rebecca Fao", email = "rebecca.fao@nrel.gov" },
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
