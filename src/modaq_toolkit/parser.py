@@ -65,7 +65,7 @@ class TopicMetadata:
 
 
 class MCAPParser:
-    """Parses MCAP files and converts them to parquet format with metadata."""
+    """Parses MCAP files and converts them to parquet format with metadata or returns dataframes in memory."""
 
     # Class-level configuration
     TIME_WARNING_THRESHOLD_SECONDS: float = (
@@ -228,6 +228,34 @@ class MCAPParser:
                 f"  Earliest ending topics: {', '.join(earliest_end_topics)} at {earliest_end}\n"
                 f"  Latest ending topics: {', '.join(latest_end_topics)} at {latest_end}"
             )
+
+    def get_dataframes(self, process_stage2: bool = False) -> dict[str, pd.DataFrame]:
+        """
+        Return a dictionary of processed dataframes without saving to disk.
+
+        Args:
+            process_stage2: If True, process dataframes for stage 2 (expand arrays, etc.)
+
+        Returns:
+            A dictionary with topic names as keys and processed dataframes as values
+        """
+        result = {}
+
+        # Filter out empty dataframes
+        non_empty_topics = {
+            topic: df for topic, df in self.dataframes.items() if not df.empty
+        }
+
+        if not process_stage2:
+            # Return the original dataframes
+            return non_empty_topics
+
+        # Process for stage 2 (expand arrays, add time index, etc.)
+        for topic, df in non_empty_topics.items():
+            processed_df, _ = self._process_dataframe_for_stage2(df.copy())
+            result[topic] = processed_df
+
+        return result
 
     def create_output(self, output_dir: Path, stage: str = "a1_one_to_one") -> None:
         """Create partitioned parquet files and metadata JSON for each topic."""
@@ -398,6 +426,11 @@ class MCAPParser:
         )
 
 
+def parse_run_name_from_path(input_path: Path):
+    final_dir = input_path.name
+    return final_dir.replace("Bag_", "")
+
+
 def get_mcap_files(input_path: Path) -> list[tuple[Path, str]]:
     """
     Recursively find all MCAP files in the input directory and its subdirectories.
@@ -411,14 +444,130 @@ def get_mcap_files(input_path: Path) -> list[tuple[Path, str]]:
         rel_path = mcap_path.relative_to(input_path)
 
         # If file is in a subdirectory, use parent folder name as group
-        if len(rel_path.parts) > 1:
-            group_name = rel_path.parts[0]
-        else:
-            group_name = "default"
+        # if len(rel_path.parts) > 1:
+        #     group_name = rel_path.parts[0]
+        # else:
+        #     group_name = "default"
+        group_name = parse_run_name_from_path(input_path)
 
         mcap_files.append((mcap_path, group_name))
 
     return sorted(mcap_files)
+
+
+def process_mcap_and_get_dataframes(
+    mcap_file: Path, process_stage2: bool = False
+) -> dict[str, pd.DataFrame]:
+    """
+    Process a single MCAP file and return the dataframes without saving to disk.
+
+    Args:
+        mcap_file: Path to the MCAP file
+        process_stage2: If True, process dataframes for stage 2 (expand arrays, etc.)
+
+    Returns:
+        A dictionary with topic names as keys and processed dataframes as values
+    """
+
+    logger.info(f"Processing file {mcap_file.name} for in-memory access")
+
+    parser = MCAPParser(mcap_file)
+    parser.read_mcap()
+
+    # Get dataframes with or without stage 2 processing
+    return parser.get_dataframes(process_stage2=process_stage2)
+
+
+def process_mcap_dir_to_dataframes(
+    input_dir: Path, process_stage2: bool = True, concat_by_topic: bool = True
+) -> dict[str, dict[str, pd.DataFrame] | pd.DataFrame]:
+    """
+    Process all MCAP files in a directory and return them as a dictionary
+    organized by group name.
+
+    Args:
+        input_dir: Path to directory containing MCAP files
+        process_stage2: If True, process dataframes with stage 2 processing
+        concat_by_topic: If True, concatenate all dataframes for each topic within a group
+                        If False, return a dictionary of dataframes per topic
+
+    Returns:
+        A dictionary where:
+        - Keys are group names
+        - Values are either:
+          - If concat_by_topic=True: Dictionary mapping topic names to concatenated dataframes
+          - If concat_by_topic=False: Dictionary mapping topic names to lists of dataframes
+    """
+    # Find all MCAP files in directory
+    mcap_files = get_mcap_files(input_dir)
+
+    if not mcap_files:
+        logger.warning(f"No MCAP files found in {input_dir}")
+        return {}
+
+    logger.info(f"Found {len(mcap_files)} MCAP files in {input_dir}")
+
+    # Group files by their parent directory
+    groups = {
+        group: len(list(files))
+        for group, files in itertools.groupby(mcap_files, key=lambda x: x[1])
+    }
+
+    for group, count in groups.items():
+        logger.info(f"Group '{group}': {count} files")
+
+    # Dictionary to store intermediate results
+    # Structure: {group_name: {topic_name: [dataframe1, dataframe2, ...]}}
+    temp_result = {}
+
+    # Process each file
+    for mcap_file, group_name in mcap_files:
+        # Get dataframes from current file
+        topic_dfs = process_mcap_and_get_dataframes(mcap_file, process_stage2)
+
+        # Skip if no dataframes were found
+        if not topic_dfs:
+            continue
+
+        # Add each topic's dataframe to the appropriate group
+        for topic, df in topic_dfs.items():
+            # Skip empty dataframes
+            if df.empty:
+                continue
+
+            # Add source file information
+            this_df = df.copy()
+            # this_df["source_file"] = mcap_file.name
+
+            # Create group entry if it doesn't exist
+            if group_name not in temp_result:
+                temp_result[group_name] = {}
+
+            # Create topic entry if it doesn't exist
+            if topic not in temp_result[group_name]:
+                temp_result[group_name][topic] = []
+
+            # Add dataframe to list
+            temp_result[group_name][topic].append(this_df)
+
+    # Process the temporary results based on concat_by_topic flag
+    result = {}
+
+    for group_name, topic_dfs_dict in temp_result.items():
+        result[group_name] = {}
+
+        if concat_by_topic:
+            # Concatenate dataframes for each topic
+            for topic, dfs in topic_dfs_dict.items():
+                concat_df = pd.concat(dfs)
+                concat_df = concat_df.sort_index()
+                result[group_name][topic] = concat_df
+        else:
+            # Keep dataframes separate
+            for topic, dfs in topic_dfs_dict.items():
+                result[group_name][topic] = dfs
+
+    return result
 
 
 def process_single_file(mcap_file: Path, group: str, output_path: Path) -> None:
