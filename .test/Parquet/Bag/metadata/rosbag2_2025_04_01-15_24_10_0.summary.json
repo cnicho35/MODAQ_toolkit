@@ -1,0 +1,123 @@
+{
+  "source_file": "test\\Bag\\rosbag2_2025_04_01-15_24_10_0.mcap",
+  "n_topics": 1,
+  "n_topics_with_data": 1,
+  "creation_time": "2025-04-01T15:27:37.663957",
+  "processing_stage": "a1_one_to_one",
+  "topics": {
+    "/ain_fast": {
+      "topic": "/ain_fast",
+      "source_file": "test\\Bag\\rosbag2_2025_04_01-15_24_10_0.mcap",
+      "n_messages": 327,
+      "n_columns": 14,
+      "columns": [
+        "sec",
+        "nanosec",
+        "frame_id",
+        "ain0",
+        "ain1",
+        "ain2",
+        "ain3",
+        "ain4",
+        "ain5",
+        "ain6",
+        "ain7",
+        "core_timer",
+        "system_time",
+        "timestamp"
+      ],
+      "dtypes": {
+        "sec": "int64",
+        "nanosec": "int64",
+        "frame_id": "object",
+        "ain0": "object",
+        "ain1": "object",
+        "ain2": "object",
+        "ain3": "object",
+        "ain4": "object",
+        "ain5": "object",
+        "ain6": "object",
+        "ain7": "object",
+        "core_timer": "object",
+        "system_time": "object",
+        "timestamp": "float64"
+      },
+      "schema": {
+        "header": {
+          "type": "std_msgs/Header",
+          "is_array": false,
+          "default": null,
+          "fields": {
+            "std_msgs/Header": {
+              "type": "MSG:",
+              "is_array": false,
+              "default": null
+            },
+            "stamp": {
+              "type": "builtin_interfaces/Time",
+              "is_array": false,
+              "default": null
+            },
+            "frame_id": {
+              "type": "string",
+              "is_array": false,
+              "default": null
+            }
+          }
+        },
+        "ain0": {
+          "type": "float64",
+          "is_array": true,
+          "default": null
+        },
+        "ain1": {
+          "type": "float64",
+          "is_array": true,
+          "default": null
+        },
+        "ain2": {
+          "type": "float64",
+          "is_array": true,
+          "default": null
+        },
+        "ain3": {
+          "type": "float64",
+          "is_array": true,
+          "default": null
+        },
+        "ain4": {
+          "type": "float64",
+          "is_array": true,
+          "default": null
+        },
+        "ain5": {
+          "type": "float64",
+          "is_array": true,
+          "default": null
+        },
+        "ain6": {
+          "type": "float64",
+          "is_array": true,
+          "default": null
+        },
+        "ain7": {
+          "type": "float64",
+          "is_array": true,
+          "default": null
+        },
+        "core_timer": {
+          "type": "uint64",
+          "is_array": true,
+          "default": null
+        },
+        "system_time": {
+          "type": "uint64",
+          "is_array": true,
+          "default": null
+        }
+      },
+      "processing_stage": "a1_one_to_one",
+      "parquet_file": "channel=ain_fast\\rosbag2_2025_04_01-15_24_10_0.ain_fast.parquet"
+    }
+  }
+}
